@@ -1,1 +1,3 @@
-test
+stop_loss_values = {'SCHAND': 254.0}
+stock = 'SCHAND'
+print(stop_loss_values[stock])
