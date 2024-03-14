@@ -9,6 +9,7 @@ import pytz
 from time import sleep
 import csv
 from tqdm import tqdm  # Import tqdm for progress bars
+from Exit_Stratergy import exit_stratergy
 
 bought_quantities = {}
 
@@ -62,16 +63,16 @@ def get_historical_data(symbol, from_date, to_date, interval):
     
 
 def get_historical_data_minute(symbol, from_date, to_date, interval):
-    try:
+    # try:
         historical_data = kite.historical_data(instrument_token=symbol,
                                            from_date=from_date,
                                            to_date=to_date,
                                            interval=interval)
         df = pd.DataFrame(historical_data)
         return df
-    except:
-        return []
-        print('issue in fetching historical data from Kite')
+    # except:
+    #     return []
+    #     print('issue in fetching historical data from Kite')
     
 
 # Function to calculate 44-day moving average
@@ -90,7 +91,7 @@ def place_buy_order(stoploss_price ,stock_symbol, quantity):
         quantity=quantity,
         order_type="MARKET",
         product="CNC",  # Cash and Carry (hold overnight)
-        variety="regular",
+        variety="amo",
         trigger_price=stoploss_price # Specify stoploss price
         # validity="GTT"  # Validity of the order (DAY, IOC, GTT)
     )
@@ -215,10 +216,20 @@ def calculate_quantity(price):
         return 1
     else:
         return 1  # Default quantity if price exceeds 3000
+    
+
+file_path_stocks_bought = 'bought_stocks_info.csv' #TODO replace with actual file name
+bought_stocks_df = pd.read_csv(file_path_stocks_bought)
+
+instruments = 'instruments.csv'
+instruments_df = pd.read_csv(instruments)
+
+
+
 
 entry_price = {}  # Dictionary to store entry prices for each stock
 
-bought_stocks = []
+bought_stocks = bought_stocks_df['STOCK'].to_list()
 
 stocks_bought = []
 
@@ -245,8 +256,11 @@ def scan_and_trade():
 
     # Iterate through each stock
     # for stock in tqdm(nse_equity_stocks, desc="Scanning stocks", unit="stock"):
+    a=0
     for stock in nse_equity_stocks:
-        print(f"Scanning {stock['tradingsymbol']}...")
+        b=a+1
+        a=a+1
+        print(f"{b} Scanning {stock['tradingsymbol']}...")
         # Fetch historical data for the last  90 days
         to_date = datetime.now().strftime('%Y-%m-%d')
         from_date = (datetime.now() - timedelta(days=90)).strftime('%Y-%m-%d')
@@ -290,7 +304,7 @@ def scan_and_trade():
                                             buy_stocks[stock['tradingsymbol']] = (data['close'].iloc[-1] - data['open'].iloc[-1]) / data['open'].iloc[-1] * 100
                                             entry_price[stock['tradingsymbol']] = data['close'].iloc[-1] 
                                             # Set initial stop-loss to the lowest low of the previous two candles
-                                            stop_loss_values[stock['tradingsymbol']] = min(data['low'].iloc[-2], data['low'].iloc[-3])
+                                            stop_loss_values[stock['tradingsymbol']] = min(data['low'].iloc[-1],data['low'].iloc[-2], data['low'].iloc[-3])
                                             stocks_bought.append(stock)
                                             quantity_to_buy = calculate_quantity(data['close'].iloc[-1]) # Determine quantity based on price
                                             bought_quantities[stock['tradingsymbol']] = quantity_to_buy  # Update bought quantity
@@ -316,7 +330,7 @@ def scan_and_trade():
                                             buy_stocks[stock['tradingsymbol']] = (data['close'].iloc[-1] - data['open'].iloc[-1]) / data['open'].iloc[-1] * 100
                                             entry_price[stock['tradingsymbol']] = data['close'].iloc[-1] 
                                             # Set initial stop-loss to the lowest low of the previous two candles
-                                            stop_loss_values[stock['tradingsymbol']] = min(data['low'].iloc[-2], data['low'].iloc[-3])
+                                            stop_loss_values[stock['tradingsymbol']] = min(data['low'].iloc[-1], data['low'].iloc[-2], data['low'].iloc[-3])
                                             stocks_bought.append(stock)
                                             quantity_to_buy = calculate_quantity(data['close'].iloc[-1]) # Determine quantity based on price
                                             bought_quantities[stock['tradingsymbol']] = quantity_to_buy  # Update bought quantity
@@ -329,6 +343,7 @@ def scan_and_trade():
                 print(f"Not enough data in DataFrame to perform calculations for stock : {stock['tradingsymbol']}")
         else:
                 print(f"Not enough data in DataFrame to perform calculations for stock : {stock['tradingsymbol']}")
+    
 
     # Sort buy_stocks dictionary based on percentage day change
     sorted_buy_stocks = sorted(buy_stocks.items(), key=lambda x: x[1], reverse=True)
@@ -355,7 +370,7 @@ def scan_and_trade():
             # Fetch latest data for the bought stock
             for item in stocks_bought:
                     if item['tradingsymbol'] == stock:
-                        instrument_token = item['instrument_token']
+                        instrument_token = instruments_df['instrument_token'](instruments_df['tradingsymbol'] == stock)
                         # print(f"Found instrument token for {stock}: {instrument_token}")
                         break
                     else:
@@ -441,70 +456,95 @@ while True:
             # if datetime.now(ist).time() >= datetime.time(hour=9, minute=15) and datetime.now(ist).time() <= datetime.time(hour=9, minute=30): TODO this condition can be depreciated as it narrows the buy order time by just 15 mins
             if len(bought_stocks) < 10:
                 # Call scan_and_trade function only if stocks were sold previously
+                print(f"previously bought stocks are: {bought_stocks}")
                 if not initial_buy_completed or stocks_sold:
                     scan_and_trade()
                     initial_buy_completed = True  # Set flag to indicate initial buy operation completed
 
             else:
+                # 12Mar: below three lines are used to take the stockfrom the refreshed list of csv saved.
+                file_path_stocks_bought = 'bought_stocks_info.csv' #TODO replace with actual file name
+                bought_stocks_df = pd.read_csv(file_path_stocks_bought)
+                bought_stocks = bought_stocks_df['STOCK'].to_list()
                 # Monitor trades every 5 minutes
                 for stock in bought_stocks:
+                    entry_price = bought_stocks_df[bought_stocks_df['STOCK'] == stock]['ENTRYPRICE'].iloc[0] # 12Mar: to bring in the stoploss directly from the saved excel for already placed orders                    
+                    stop_loss_values = bought_stocks_df[bought_stocks_df['STOCK'] == stock]['STOPLOSS'].iloc[0] # 12Mar: to bring in the stoploss directly from the saved excel for already placed orders
                     print(f"Monitoring stock: {stock}")
 
-                    for item in stocks_bought:
-                        if item['tradingsymbol'] == stock:
-                            instrument_token = item['instrument_token']
-                            # print(f"Found instrument token for {stock}: {instrument_token}")
-                            break
-                    else:
-                        print(f"Could not find instrument token for {stock}")
-                        continue
-                    
+                    # for item in stocks_bought: #12Mar: Previous condition was for item in stocks_bought:
+                    #     # if item['tradingsymbol'] == stock: #12Mar: commented this condition as it is not relavant
+                    #         instrument_token = instruments_df[instruments_df['tradingsymbol'] == stock]['instrument_token']
+                    #         # print(f"Found instrument token for {stock}: {instrument_token}")
+                    #         break
+                    # else:
+                    #     print(f"Could not find instrument token for {stock}")
+                    #     continue
+
+                    instrument_token = instruments_df[instruments_df['tradingsymbol'] == stock]['instrument_token']
+            
                     # Fetch latest data for the stock
                     to_date = to_ist(datetime.now()).strftime('%Y-%m-%d')
                     from_date = to_ist(datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
-                    data = get_historical_data_minute(instrument_token, from_date, to_date, 'minute')
+
+                    for value in instrument_token.astype(str).values:
+                        
+                        data = get_historical_data_minute(str(value), from_date, to_date, 'minute')
+        
 
                     # # Print contents of stocks_bought and stop_loss_values
                     # print("stocks_bought:", stocks_bought)
-                    print(f"stop_loss_values: {stop_loss_values[stock]}")
+                    print(f"stop_loss_values{stock}: {stop_loss_values}")
+                    print(f"entry price: {entry_price}")
 
-                    if len(data) >= 2:
+                    # if len(data) >= 2:
                         # Check if stop-loss is hit
-                        if data['low'].iloc[-1] < stop_loss_values[stock]:
-                            # Place sell order if stop-loss hit
-                            place_sell_order(stock, quantity=1)
-                            stocks_sold.append({
+                    if data['low'].iloc[-1] < stop_loss_values:
+                        # Place sell order if stop-loss hit
+                        place_sell_order(stock, quantity=bought_stocks_df[bought_stocks_df['STOCK']== stock]['QUANTITIES'].iloc[0])
+                        stocks_sold.append({
+                        "Symbol": stock,
+                        # "Quantity": bought_quantities[stock], #TODO bought quantites need to be updated with a logic
+                        "Quantity": bought_stocks_df[bought_stocks_df['STOCK']== stock]['QUANTITIES'].iloc[0],
+                        "Sell Price": data['low'].iloc[-1],
+                        "Stop Loss": stop_loss_values
+                        })
+                        print(f"Stop Loss Hit for symbol {stock}. Sell order placed.")
+                        del stop_loss_values  # Remove stop-loss for the symbol after selling
+                        del bought_quantities  # Remove bought quantities
+                        bought_stocks.remove(stock)
+                        continue
 
-                            "Symbol": stock,
-                            # "Quantity": bought_quantities[stock], #TODO bought quantites need to be updated with a logic
-                            "Quantity": 1,
-                            "Sell Price": data['low'].iloc[-1],
-                            "Stop Loss": stop_loss_values[stock]
-                            })
-                            print(f"Stop Loss Hit for symbol {stock}. Sell order placed.")
-                            del stop_loss_values[stock]  # Remove stop-loss for the symbol after selling
-                            del bought_quantities[stock]  # Remove bought quantities
+                    
+
+                    # Check if the price reached 1:1 of stop-loss and update stop-loss accordingly
+                    elif data['close'].iloc[-1] >= entry_price + (entry_price - stop_loss_values):
+                        new_stop_loss = data['close'].iloc[-1] - (entry_price - stop_loss_values)
+                        sleep(20)
+                        if new_stop_loss > entry_price:
+                            stop_loss_values = new_stop_loss
+                            order_id = order_ids.get(stock)
+                            # modify_stoploss(order_id,stop_loss_values)
+                            print(f"Stop Loss updated for symbol {stock} (Order ID: {order_id}): {stop_loss_values}")
+                        else:
+                            print(f"New stop loss calculation for {stock} is less than entry price, stop loss not updated.")
+                    else:
+                        msg = exit_stratergy(stock, kite)
+                        if msg:
                             bought_stocks.remove(stock)
-                            continue
-                        print(stop_loss_values[stock])``
+                            print(f"sold stock using exit stratergy{stock}")
+                        else:
+                            print(f"Stocks were not sold")
 
-                        # Check if the price reached 1:1 of stop-loss and update stop-loss accordingly
-                        if data['close'].iloc[-1] >= stop_loss_values[stock] + (stop_loss_values[stock] - entry_price[stock]) * 0.5:
-                            new_stop_loss = data['close'].iloc[-1] - (stop_loss_values[stock] - entry_price[stock])
-                            sleep(20)
-                            if new_stop_loss > entry_price[stock]:
-                                stop_loss_values[stock] = new_stop_loss
-                                order_id = order_ids.get(stock)
-                                # modify_stoploss(order_id,stop_loss_values[stock])
-                                print(f"Stop Loss updated for symbol {stock} (Order ID: {order_id}): {stop_loss_values[stock]}")
-                            else:
-                                print(f"New stop loss calculation for {stock} is less than entry price, stop loss not updated.")
+                        continue
 
-                    # Print profit/loss in tabular format
-                    if stocks_sold:
-                        print(tabulate(stocks_sold, headers='keys', tablefmt='grid'))
-                        save_results_to_csv(stocks_sold)
-                    sleep(300)  # 5 minutes in seconds
+                    # # Print profit/loss in tabular format
+                    # if stocks_sold:
+                    #     print(tabulate(stocks_sold, headers='keys', tablefmt='grid'))
+                    #     save_results_to_csv(stocks_sold)
+                sleep(600)  # 5 minutes in seconds
+                    
+
                 
         else:
             print(f"Outside trading hours, current time is {current_ist_time.time()}")
