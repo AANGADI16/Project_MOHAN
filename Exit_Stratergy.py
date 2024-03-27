@@ -125,7 +125,7 @@ def exit_stratergy(stock, kite):
             return None
 
         # Get the bought price for the latest trade
-        bought_price = symbol_buy_trades_df.loc[symbol_buy_trades_df['EXECUTEDDATE'] == latest_trade_date, 'ENTRYPRICE'].iloc[0]
+        bought_price = symbol_buy_trades_df.loc[symbol_buy_trades_df['EXECUTEDDATE'] == latest_trade_date, 'ENTRYPOINT'].iloc[0]
         return bought_price
 
     # Example usage:

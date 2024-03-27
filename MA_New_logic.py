@@ -2,7 +2,7 @@ from kiteconnect import KiteConnect
 import pandas as pd
 import os
 import pyotp
-from datetime import datetime, time, timedelta
+from datetime import datetime, time, timedelta, timezone
 import json
 import requests
 import pytz
@@ -83,15 +83,16 @@ def calculate_44_day_moving_average(data):
         print('schema not correct')
 
 # Function to place buy order for a stock
-def place_buy_order(stoploss_price ,stock_symbol, quantity):
+def place_buy_order(stoploss_price ,price,stock_symbol, quantity):
     response = kite.place_order(
         tradingsymbol=stock_symbol,
         exchange="NSE",
         transaction_type="BUY",
         quantity=quantity,
-        order_type="MARKET",
+        price=price,
+        order_type="LIMIT",
         product="CNC",  # Cash and Carry (hold overnight)
-        variety="amo",
+        variety="regular",
         trigger_price=stoploss_price # Specify stoploss price
         # validity="GTT"  # Validity of the order (DAY, IOC, GTT)
     )
@@ -103,6 +104,53 @@ def place_buy_order(stoploss_price ,stock_symbol, quantity):
     else:
         print("Response is not a dictionary")
         return None
+    
+def place_buy_order_test(stoploss ,price,target,symbol, quantity):
+    # try:
+        # Place regular buy order
+
+        regular_order_id = kite.place_order(
+            tradingsymbol=symbol,
+            exchange=kite.EXCHANGE_NSE,
+            transaction_type=kite.TRANSACTION_TYPE_BUY,
+            quantity=quantity,
+            order_type=kite.ORDER_TYPE_LIMIT,
+            price=price,
+            product='CNC',
+            variety="regular"
+        )
+        
+        # Place GTT stoploss order
+        stoploss_order_id = kite.place_gtt(tradingsymbol=symbol,
+                                           exchange = 'NSE',
+                                            trigger_type=kite.GTT_TYPE_SINGLE,
+                                            last_price=price,
+                                            trigger_values=[stoploss],
+                                            orders=[{'transaction_type': 'SELL',
+                                                     'quantity': quantity,
+                                                     'price': stoploss-1,
+                                                     'order_type': 'LIMIT',
+                                                     'product': 'CNC'}])
+        
+        # Place GTT target order
+        target_order_id = kite.place_gtt(tradingsymbol=symbol,
+                                        trigger_type=kite.GTT_TYPE_SINGLE,
+                                          exchange = 'NSE',
+                                          last_price=price,
+                                          trigger_values=[target],
+                                          orders=[{'transaction_type': 'SELL',
+                                                   'quantity': quantity,
+                                                   'price': target+1,
+                                                   'order_type':'LIMIT',
+                                                   'product': 'CNC'}])
+
+        print("Buy order placed successfully")
+        print("Regular order ID:", regular_order_id)
+        print("Stoploss GTT order ID:", stoploss_order_id)
+        print("Target GTT order ID:", target_order_id)
+    
+    # except Exception as e:
+    #     print("Error placing order:", e)
     
 def modify_stoploss(order_id, stoploss_price):
     """
@@ -127,7 +175,7 @@ def place_sell_order(stock_symbol, quantity):
         product="CNC",
         # stoploss=str(stop_loss)  # Set stop loss
         variety="regular"
-    )['order_id']
+    )
     return order_id
 
 # # Dictionary to store stop-loss values for each symbol
@@ -237,6 +285,9 @@ bought_stocks_info = []
 
 order_ids = {}
 
+nifty500_df = pd.read_csv('ind_nifty500list.csv')
+nifty500 = nifty500_df['Symbol'].to_list()
+
 # Function to scan NSE equity stocks and identify stocks with green candle near 44-day MA
 def scan_and_trade():
     print("Scanning and trading...")
@@ -245,6 +296,7 @@ def scan_and_trade():
     # while True:
     # Get all NSE equity instruments
     instruments = kite.instruments("NSE")
+    # instruments = nifty500
     nse_equity_stocks = [instrument for instrument in instruments if instrument['segment'] == "NSE" and 
                             instrument['exchange'] == "NSE" and instrument['instrument_type'] == "EQ" and 
                             instrument['last_price'] < 1000 and instrument['tradingsymbol'][0].isalpha() and 
@@ -252,101 +304,108 @@ def scan_and_trade():
                             and 'ETF' not in instrument['tradingsymbol']
                             and 'VIVO-SM' not in instrument['tradingsymbol']
                             and 'AHIMSA-ST' not in instrument['tradingsymbol']
+                            # and 'AUTOIND' in instrument['tradingsymbol']
                              ]
+    
+    # nse_equity_stocks = nifty500
 
     # Iterate through each stock
     # for stock in tqdm(nse_equity_stocks, desc="Scanning stocks", unit="stock"):
     a=0
     for stock in nse_equity_stocks:
-        b=a+1
-        a=a+1
-        print(f"{b} Scanning {stock['tradingsymbol']}...")
-        # Fetch historical data for the last  90 days
-        to_date = datetime.now().strftime('%Y-%m-%d')
-        from_date = (datetime.now() - timedelta(days=90)).strftime('%Y-%m-%d')
-        data = get_historical_data(stock, from_date, to_date, 'day')
+        # print(stock['tradingsymbol'])
+        # print(f"nifty500 {nifty500}")
+        if stock['tradingsymbol'] in nifty500:
+            b=a+1
+            a=a+1
+            print(f"{b} Scanning {stock['tradingsymbol']}...")
+            # Fetch historical data for the last  90 days
+            to_date = datetime.now().strftime('%Y-%m-%d')
+            from_date = (datetime.now() - timedelta(days=90)).strftime('%Y-%m-%d')
+            data = get_historical_data(stock, from_date, to_date, 'day')
 
-        if len(data) >= 2:
+            if len(data) >= 0:
 
-            # Calculate 44-day moving average
-            calculate_44_day_moving_average(data)
+                # Calculate 44-day moving average
+                calculate_44_day_moving_average(data)
 
-            # Calculate ATR
-            data['ATR'] = calculate_atr(data) 
+                # Calculate ATR
+                data['ATR'] = calculate_atr(data) 
 
-            # Calculate Supertrend
-            calculate_supertrend(data, period=20, multiplier=2)
+                # Calculate Supertrend
+                calculate_supertrend(data, period=20, multiplier=2)
 
-            # print(f"supertrend value today: {data['Trend']}")
+                # print(f"supertrend value today: {data['Trend']}")
 
-            # Check if the DataFrame has enough rows
-            # print(data)
-            if len(data) >= 2:
+                # Check if the DataFrame has enough rows
+                # print(data)
+                if len(data) >= 2:
 
-                # Check if the slope of 44-day moving average is increasing
-                try:
-                    if is_ma_slope_increasing(data, window=5) and data['Trend'].iloc[-1] == 'UP':
-                        # print(f"using bigger window to identify the slope of 44MA for stock {stock['tradingsymbol']}")
-                        # Calculate ATR
-                        atr = calculate_atr(data)
+                    # Check if the slope of 44-day moving average is increasing
+                    try:
+                        if is_ma_slope_increasing(data, window=30) and data['Trend'].iloc[-1] == 'UP':
+                            # print(f"using bigger window to identify the slope of 44MA for stock {stock['tradingsymbol']}")
+                            # Calculate ATR
+                            atr = calculate_atr(data)
 
 
-                    # Check if the previous two days' candles are near the 44-day MA line
-                        # try:
-                        if len(data) >= 2:
-                            # if (data['open'].iloc[-3] < data['close'].iloc[-3] ) and (data['open'].iloc[-2] < data['close'].iloc[-2] ) and (data['open'].iloc[-1] < data['close'].iloc[-1] ):
-                            #data['low'].iloc[-1] <= data['44_day_mavg'].iloc[-1] or  TODO this condition is suppressed as more results are returned.
-                                if ((data['open'].iloc[-1] <= data['44_day_mavg'].iloc[-1]) and (data['close'].iloc[-1] > data['44_day_mavg'].iloc[-1] )):
-                                    #to check volume spurt threshold =1 means 100% rise in volume
-                                    if detect_volume_spurt(data, threshold=1): 
-                                        # Place buy order if not already bought
-                                        # if stock not in stop_loss_values:
-                                            buy_stocks[stock['tradingsymbol']] = (data['close'].iloc[-1] - data['open'].iloc[-1]) / data['open'].iloc[-1] * 100
-                                            entry_price[stock['tradingsymbol']] = data['close'].iloc[-1] 
-                                            # Set initial stop-loss to the lowest low of the previous two candles
-                                            stop_loss_values[stock['tradingsymbol']] = min(data['low'].iloc[-1],data['low'].iloc[-2], data['low'].iloc[-3])
-                                            stocks_bought.append(stock)
-                                            quantity_to_buy = calculate_quantity(data['close'].iloc[-1]) # Determine quantity based on price
-                                            bought_quantities[stock['tradingsymbol']] = quantity_to_buy  # Update bought quantity
-                                            print(f"Initial Stop Loss set for symbol {stock['tradingsymbol']}: {stop_loss_values[stock['tradingsymbol']]}")
-                        else:
-                            print(f"Data for stock does not have enough rows to perform the comparison for stock : {stock['tradingsymbol']}")
-                        # except Exception as e:
-                        #     print(f"Error occurred while processing {stock['tradingsymbol']}: {e}")
+                        # Check if the previous two days' candles are near the 44-day MA line
+                            # try:
+                            if len(data) >= 2:
+                                # if (data['open'].iloc[-3] < data['close'].iloc[-3] ) and (data['open'].iloc[-2] < data['close'].iloc[-2] ) and (data['open'].iloc[-1] < data['close'].iloc[-1] ):
+                                #data['low'].iloc[-1] <= data['44_day_mavg'].iloc[-1] or  TODO this condition is suppressed as more results are returned.
+                                    if ((data['open'].iloc[-1] <= data['44_day_mavg'].iloc[-1]) and (data['close'].iloc[-1] > data['44_day_mavg'].iloc[-1] )):
+                                        #to check volume spurt threshold =1 means 100% rise in volume
+                                        if detect_volume_spurt(data, threshold=1): 
+                                            # Place buy order if not already bought
+                                            # if stock not in stop_loss_values:
+                                                buy_stocks[stock['tradingsymbol']] = (data['close'].iloc[-1] - data['open'].iloc[-1]) / data['open'].iloc[-1] * 100
+                                                entry_price[stock['tradingsymbol']] = data['close'].iloc[-1] 
+                                                # Set initial stop-loss to the lowest low of the previous two candles
+                                                stop_loss_values[stock['tradingsymbol']] = min(data['low'].iloc[-1],data['low'].iloc[-2], data['low'].iloc[-3])
+                                                stocks_bought.append(stock)
+                                                quantity_to_buy = calculate_quantity(data['close'].iloc[-1]) # Determine quantity based on price
+                                                bought_quantities[stock['tradingsymbol']] = quantity_to_buy  # Update bought quantity
+                                                print(f"Initial Stop Loss set for symbol {stock['tradingsymbol']}: {stop_loss_values[stock['tradingsymbol']]}")
+                            else:
+                                print(f"Data for stock does not have enough rows to perform the comparison for stock : {stock['tradingsymbol']}")
+                            # except Exception as e:
+                            #     print(f"Error occurred while processing {stock['tradingsymbol']}: {e}")
 
-                except:
-                    if is_ma_slope_increasing(data, window=2) and data['Trend'].iloc[-1] == 'UP' :
-                        # print(f"using smaller window to identify the slope of 44MA for stock {stock['tradingsymbol']}")
-                        # Calculate ATR
-                        atr = calculate_atr(data) 
-                        if len(data) >= 2:
-                            # if (data['open'].iloc[-3] < data['close'].iloc[-3] ) and (data['open'].iloc[-2] < data['close'].iloc[-2] ) and (data['open'].iloc[-1] < data['close'].iloc[-1] ):
-                            #data['low'].iloc[-1] <= data['44_day_mavg'].iloc[-1] or  TODO this condition is suppressed as more results are returned.
-                                if ((data['open'].iloc[-1] <= data['44_day_mavg'].iloc[-1]) and (data['close'].iloc[-1] > data['44_day_mavg'].iloc[-1] )):
-                                    #to check volume spurt threshold =1 means 100% rise in volume
-                                    if detect_volume_spurt(data, threshold=1): 
-                                        # Place buy order if not already bought
-                                        # if stock not in stop_loss_values:
-                                            buy_stocks[stock['tradingsymbol']] = (data['close'].iloc[-1] - data['open'].iloc[-1]) / data['open'].iloc[-1] * 100
-                                            entry_price[stock['tradingsymbol']] = data['close'].iloc[-1] 
-                                            # Set initial stop-loss to the lowest low of the previous two candles
-                                            stop_loss_values[stock['tradingsymbol']] = min(data['low'].iloc[-1], data['low'].iloc[-2], data['low'].iloc[-3])
-                                            stocks_bought.append(stock)
-                                            quantity_to_buy = calculate_quantity(data['close'].iloc[-1]) # Determine quantity based on price
-                                            bought_quantities[stock['tradingsymbol']] = quantity_to_buy  # Update bought quantity
-                                            print(f"Initial Stop Loss set for symbol {stock['tradingsymbol']}: {stop_loss_values[stock['tradingsymbol']]}")
-                        else:
-                            print(f"Data for stock does not have enough rows to perform the comparison for stock : {stock['tradingsymbol']}")
-                        # except Exception as e:
-                            # print(f"Error occurred while processing {stock['tradingsymbol']}: {e}")
+                    except:
+                        if is_ma_slope_increasing(data, window=2) and data['Trend'].iloc[-1] == 'UP' :
+                            # print(f"using smaller window to identify the slope of 44MA for stock {stock['tradingsymbol']}")
+                            # Calculate ATR
+                            atr = calculate_atr(data) 
+                            if len(data) >= 2:
+                                # if (data['open'].iloc[-3] < data['close'].iloc[-3] ) and (data['open'].iloc[-2] < data['close'].iloc[-2] ) and (data['open'].iloc[-1] < data['close'].iloc[-1] ):
+                                #data['low'].iloc[-1] <= data['44_day_mavg'].iloc[-1] or  TODO this condition is suppressed as more results are returned.
+                                    if ((data['open'].iloc[-1] <= data['44_day_mavg'].iloc[-1]) and (data['close'].iloc[-1] > data['44_day_mavg'].iloc[-1] )):
+                                        #to check volume spurt threshold =1 means 100% rise in volume
+                                        if detect_volume_spurt(data, threshold=1): 
+                                            # Place buy order if not already bought
+                                            # if stock not in stop_loss_values:
+                                                buy_stocks[stock['tradingsymbol']] = (data['close'].iloc[-1] - data['open'].iloc[-1]) / data['open'].iloc[-1] * 100
+                                                entry_price[stock['tradingsymbol']] = data['close'].iloc[-1] 
+                                                # Set initial stop-loss to the lowest low of the previous two candles
+                                                stop_loss_values[stock['tradingsymbol']] = min(data['low'].iloc[-1], data['low'].iloc[-2], data['low'].iloc[-3])
+                                                stocks_bought.append(stock)
+                                                quantity_to_buy = calculate_quantity(data['close'].iloc[-1]) # Determine quantity based on price
+                                                bought_quantities[stock['tradingsymbol']] = quantity_to_buy  # Update bought quantity
+                                                print(f"Initial Stop Loss set for symbol {stock['tradingsymbol']}: {stop_loss_values[stock['tradingsymbol']]}")
+                            else:
+                                print(f"Data for stock does not have enough rows to perform the comparison for stock : {stock['tradingsymbol']}")
+                            # except Exception as e:
+                                # print(f"Error occurred while processing {stock['tradingsymbol']}: {e}")
             else:
                 print(f"Not enough data in DataFrame to perform calculations for stock : {stock['tradingsymbol']}")
         else:
-                print(f"Not enough data in DataFrame to perform calculations for stock : {stock['tradingsymbol']}")
+                # print(f"Not in the provided list of scanning stock : {stock['tradingsymbol']}")
+            pass
     
 
     # Sort buy_stocks dictionary based on percentage day change
-    sorted_buy_stocks = sorted(buy_stocks.items(), key=lambda x: x[1], reverse=True)
+    sorted_buy_stocks = sorted(buy_stocks.items(), key=lambda x: x[1], reverse=False) #14Mar: changed the sorting to ascending
 
 
     # Place buy orders for top 10 stocks
@@ -355,51 +414,61 @@ def scan_and_trade():
             stock = stock_info  # Access the 'tradingsymbol' key from the stock_info dictionary
             print(f" Placing the buy order for {stock}")
             # place_buy_order(stock, quantity=bought_quantities[stock]) TODO error in extracting the value from the dictionary
-            try:  # Check if the instrument is not in TR/BE category
-                print(f"Placing the buy order for {stock}")
-                stoploss_price = stop_loss_values.get(stock, 0)
-                print(stoploss_price)
-                order_ids[stock] = place_buy_order(stoploss_price,stock, quantity=1)
-                bought_stocks.append(stock)
-                executed_date = datetime.now().strftime('%Y-%m-%d')
-            except:
-                print(f"Skipping {stock} as it is in TR/BE category")
+            # try:  # Check if the instrument is not in TR/BE category
+            print(f"Placing the buy order for {stock} with entry price{entry_price.get(stock)} with stoploss price {stop_loss_values.get(stock, 0)}")
+            stoploss_price = stop_loss_values.get(stock, 0)
+            buy_price = entry_price.get(stock)
+            target = buy_price+(buy_price-stoploss_price) * 3 #TODO risk to reward ratio is 1:3
+            # order_ids[stock] = place_buy_order(stoploss_price,buy_price,stock, quantity=1)
+            place_buy_order_test(stoploss_price,buy_price,target,stock, quantity=1)
+            bought_stocks.append(stock)
+            executed_date = datetime.now().strftime('%Y-%m-%d')
+            # except:
+            # print(f"Skipping {stock} as it is in TR/BE category")
             # Fetch latest data for the bought stock
             to_date = to_ist(datetime.now()).strftime('%Y-%m-%d')
             from_date = to_ist(datetime.now() - timedelta(days=2)).strftime('%Y-%m-%d')
-            # Fetch latest data for the bought stock
+            # TODO work on below for loop it is causing error Fetch latest data for the bought stock
             for item in stocks_bought:
                     if item['tradingsymbol'] == stock:
-                        instrument_token = instruments_df['instrument_token'](instruments_df['tradingsymbol'] == stock)
+                        instrument_token = stocks_bought[0]['instrument_token']
+                        # instrument_token = instruments_df['instrument_token'](instruments_df['tradingsymbol'] == stock)
+                        
+
                         # print(f"Found instrument token for {stock}: {instrument_token}")
                         break
                     else:
                         print(f"Could not find instrument token for {stock}")
                         continue
-            try:
-                to_date = to_ist(datetime.now()).strftime('%Y-%m-%d')
-                from_date = to_ist(datetime.now() - timedelta(days=2)).strftime('%Y-%m-%d')
-                data_1 = get_historical_data_minute(instrument_token, from_date, to_date, 'day')
-                entry_price_1 = data_1['open'].iloc[-1]  # Assuming open price as entry price
+            # try:
+            to_date = to_ist(datetime.now()).strftime('%Y-%m-%d')
+            from_date = to_ist(datetime.now() - timedelta(days=2)).strftime('%Y-%m-%d')
+            data_1 = get_historical_data_minute(instrument_token, from_date, to_date, 'day')
+            entry_price_1 = data_1['open'].iloc[-1]  # Assuming open price as entry price
 
 
-                bought_stocks_info.append({
-                    'Stock': stock,
-                    'Executed Date': executed_date,
-                    'Entry Price': entry_price_1,
-                    'Stop Loss': stop_loss_values.get(stock, 0)  # Assuming stop_loss_values is a dictionary
-                })
+            bought_stocks_info.append({
+                'STOCK': stock,
+                'EXECUTEDDATE': executed_date,
+                'ENTRYPOINT': entry_price_1,
+                'STOPLOSS': stop_loss_values.get(stock, 0),  # Assuming stop_loss_values is a dictionary
+                'QUANTITIES': 1 #TODO need to make it dynamic
+            })
 
-                # Write the collected information to a CSV file
-                with open('bought_stocks_info.csv', 'w', newline='') as csvfile:
-                    fieldnames = ['Stock', 'Executed Date', 'Entry Price', 'Stop Loss']
-                    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            # Write the collected information to a CSV file
+            with open('bought_stocks_info.csv', 'a', newline='') as csvfile:  # Use 'a' for append mode
+                fieldnames = ['STOCK', 'EXECUTEDDATE', 'ENTRYPOINT', 'STOPLOSS','QUANTITIES']
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
 
-                    writer.writeheader()
-                    for stock_info in bought_stocks_info:
-                        writer.writerow(stock_info)
-            except:
-                print('Error in csv writing block')
+                # Check if the file is empty
+                if csvfile.tell() == 0:
+                    writer.writeheader()  # Write header only if the file is empty
+
+                # Append data to the file
+                for stock_info in bought_stocks_info:
+                    writer.writerow(stock_info)
+            # except:
+            #     print('Error in csv writing block')
     else:
         print('No stocks to place orders as no stocks met the condition in scan_and_trade')
 
@@ -442,7 +511,7 @@ print("Current IST:", current_ist_time)
 trading_start_time_to_buy = datetime.combine(datetime.now(), time(11, 15))
 trading_end_time_to_buy = datetime.combine(datetime.now(), time(15, 30))
 #TODO implement a logic where I can sell the stock between 9:15 to 15:30 and buy between 11:15 to 15:30
-trading_start_time = datetime.combine(datetime.now(), time(11, 00))
+trading_start_time = datetime.combine(datetime.now(), time(9, 15))
 trading_end_time = datetime.combine(datetime.now(), time(15, 30))
 
         # if current_ist_time.time() < trading_start_time.time() or current_ist_time.time() > trading_end_time.time():
@@ -454,7 +523,7 @@ while True:
         if current_ist_time.time() >= trading_start_time.time() and current_ist_time.time() <= trading_end_time.time():
             # Place buy order once daily
             # if datetime.now(ist).time() >= datetime.time(hour=9, minute=15) and datetime.now(ist).time() <= datetime.time(hour=9, minute=30): TODO this condition can be depreciated as it narrows the buy order time by just 15 mins
-            if len(bought_stocks) < 10:
+            if len(bought_stocks) < 100:
                 # Call scan_and_trade function only if stocks were sold previously
                 print(f"previously bought stocks are: {bought_stocks}")
                 if not initial_buy_completed or stocks_sold:
@@ -468,7 +537,7 @@ while True:
                 bought_stocks = bought_stocks_df['STOCK'].to_list()
                 # Monitor trades every 5 minutes
                 for stock in bought_stocks:
-                    entry_price = bought_stocks_df[bought_stocks_df['STOCK'] == stock]['ENTRYPRICE'].iloc[0] # 12Mar: to bring in the stoploss directly from the saved excel for already placed orders                    
+                    entry_price = bought_stocks_df[bought_stocks_df['STOCK'] == stock]['ENTRYPOINT'].iloc[0] # 12Mar: to bring in the stoploss directly from the saved excel for already placed orders                    
                     stop_loss_values = bought_stocks_df[bought_stocks_df['STOCK'] == stock]['STOPLOSS'].iloc[0] # 12Mar: to bring in the stoploss directly from the saved excel for already placed orders
                     print(f"Monitoring stock: {stock}")
 
@@ -543,6 +612,7 @@ while True:
                     #     print(tabulate(stocks_sold, headers='keys', tablefmt='grid'))
                     #     save_results_to_csv(stocks_sold)
                 sleep(600)  # 5 minutes in seconds
+            sleep(600)  # 5 minutes in seconds
                     
 
                 
